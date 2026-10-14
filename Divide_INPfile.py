@@ -1,78 +1,69 @@
-# command line - python Divide_INPfile.py [Inp-file name]
-# Inp-file - Abaqus inp-file with nodes coordinates, elements and sets 
+# command line - python Divide_INPfile.py [file name]
+# file name - a file with nodes coordinates, elements and sets 
 #
 import sys
+from meshio import read
+float_fmt = '.16e'
+nnl = 16
 #
-f=open(sys.argv[1])
-fn=open("Nodes.inc","w")
-fs=open("Sets.inc","w")
-#----------------
-MaxNode=1
-ElemM={}
-while True:
-	line=f.readline().strip()
-	if not line:
-		break
-	line_l=line.lower()
-	if line_l.startswith("*step"):
-		break
-	elif line_l.startswith("** part"):
-		fn.write("** ----------------------------------------------------------------\n")
-		fn.write("**\n")
-		fn.write(line+"\n")
-		fn.write("**\n")
-	elif line_l.startswith("**"):
-		if FlagElem != "":
-			ElemM[FlagElem].append(line)
-	elif line_l.startswith("*"):
-		FlagSyst=False
-		FlagNode=False
-		FlagSet=False
-		FlagElem=""		
-#-----------------Determine of section
-		if  line_l.startswith("*system"):
-			FlagSyst=True
-			fn.write(line+"\n")
-		elif  line_l.startswith("*node"):
-			FlagNode=True
-			fn.write(line+"\n")
-		elif  line_l.startswith("*element"):
-			start=line.find("type")
-			start=line.find("=",start)+1
-			end=line.find(",",start)
-			if end<0:
-			       end=len(line)
-			FlagElem=line[start:end].strip()
-			if not FlagElem in ElemM:
-				ElemM[FlagElem]=[]
-		elif line_l.startswith(("*nset","*elset","*surface")):
-			FlagSet=True
-			fs.write(line+"\n")
-	elif FlagSyst:
-		fn.write(line+"\n")
-	elif FlagNode:
-		fn.write(line+"\n")
-		TextValue=line.split(",")
-		Value=int(TextValue[0])
-		if Value>MaxNode:
-			MaxNode=Value
-	elif FlagElem != "":
-		ElemM[FlagElem].append(line)
-#		TextValue=line.split(",")
-#		Value=[]
-#		for i in TextValue:
-#		   Value.append(int(i))
-#		ElemM[FlagElem].append(Value)
-	elif FlagSet:
-		fs.write(line+"\n")		
-#-------------------------
-fs.write("*Nset, nset=NAll, generate\n")
-fs.write("1, "+str(MaxNode)+", 1\n")
+mesh=read(sys.argv[1])
+FileName=sys.argv[1][:sys.argv[1].rfind('.')]
+#--------File of Nodes--------
+f=open(FileName+'_nodes.inc','w')
+f.write("*NODE\n")
+fmt = ", ".join(["{}"] + ["{:" + float_fmt + "}"] * mesh.points.shape[1]) + "\n"
+for k, x in enumerate(mesh.points):
+    if 'Node_Ids' in mesh.point_data:
+        f.write(fmt.format(mesh.point_data['Node_Ids'][k], *x))
+    else:
+        f.write(fmt.format(k + 1, *x))
+f.close()	
+#---------File of elements--------
+files={}
+for ic in range(len(mesh.cells)):
+    cell_type = mesh.cells[ic].type
+    if not cell_type in files:
+	    files[cell_type]=open(FileName+'_elms_'+cell_type+'.inc','w')
+    node_idcs = mesh.cells[ic].data
+    for ir in range(len(node_idcs)):
+        row=node_idcs[ir]
+        if 'Element_Ids' in mesh.cell_data:
+            eid = mesh.cell_data['Element_Ids'][ic][ir]
+        else:
+            eid += 1
+        nums=[str(eid)]
+        if 'Node_Ids' in mesh.point_data:
+            nids_strs = (str(mesh.point_data['Node_Ids'][nid]) for nid in row.tolist())
+        else:
+            nids_strs = (str(nid + 1) for nid in row.tolist())
+        nums += nids_strs
+        files[cell_type].write(",\n".join(",".join(nums[i : i + nnl]) for i in range(0, len(nums), nnl)) + "\n")
+for cell_type in files:
+    files[cell_type].close() 
+#----------File of sets---------------
+f=open(FileName+'_sets.inc','w')
+offset = 0
+for k, v in mesh.cell_sets.items():
+    f.write(f"*ELSET, ELSET={k}\n")
+    nums=[]
+    for ic in range(len(mesh.cells)):
+        if len(v[ic]) > 0:
+            if 'Element_Ids' in mesh.cell_data:
+                for i in v[ic]: nums.append(str(mesh.cell_data['Element_Ids'][ic][i]))
+            else:
+                for i in v[ic]: nums.append(str(i + 1 + offset))
+        offset += len(mesh.cells[ic].data)
+    f.write(",\n".join(",".join(nums[i : i + nnl]) for i in range(0, len(nums), nnl)) + "\n")
+for k, v in mesh.point_sets.items():
+    if 'Node_Ids' in mesh.point_data:
+        nums = [str(mesh.point_data['Node_Ids'][i]) for i in v]
+    else:
+        nums = [str(i + 1) for i in v]
+    f.write(f"*NSET, NSET={k}\n")
+    f.write(",\n".join(",".join(nums[i : i + nnl]) for i in range(0, len(nums), nnl)) + "\n")
+if hasattr(mesh, 'faces'):
+    for k, v in mesh.faces.items():
+        f.write(f"*SURFACE, TYPE=ELEMENT, NAME={k}\n")
+        for face in v:
+            f.write(face+','+' S'+str(v[face]+1)+'\n')
 f.close()
-fn.close()
-fs.close
-for i in list(ElemM):
-	f=open("Elements_"+i+".inc", "w")
-	for j in ElemM[i]:
-		f.write(j+"\n")
-	f.close()
